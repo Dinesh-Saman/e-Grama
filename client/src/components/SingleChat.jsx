@@ -39,6 +39,12 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
   
   // Use a ref to persist the socket instance between renders
   const socketRef = useRef(null);
+  // Set auto-refresh interval (in milliseconds)
+  const REFRESH_INTERVAL = 5000; // 5 seconds
+  // Ref to track if component is mounted
+  const isMountedRef = useRef(true);
+  // Ref to track the refresh interval
+  const refreshIntervalRef = useRef(null);
 
   const defaultOptions = {
     loop: true,
@@ -53,7 +59,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     ChatState();
 
   const fetchMessages = async () => {
-    if (!selectedChat) return;
+    if (!selectedChat || !isMountedRef.current) return;
 
     console.log("Fetching messages for chat ID:", selectedChat._id);
     try {
@@ -63,7 +69,10 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
         },
       };
 
-      setLoading(true);
+      // Don't show loading indicator for auto-refresh
+      if (!refreshIntervalRef.current) {
+        setLoading(true);
+      }
 
       const { data } = await axios.get(
         `http://localhost:5000/api/message/${selectedChat._id}`,
@@ -89,12 +98,15 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
       }
     } catch (error) {
       console.error("Error fetching messages:", error.response?.data || error.message);
-      setMessages([]);
-      enqueueSnackbar(error.response?.data?.message || "Failed to Load the Messages", { 
-        variant: 'error',
-        anchorOrigin: { vertical: 'bottom', horizontal: 'center' }
-      });
-      setLoading(false);
+      // Only show error if not an auto-refresh
+      if (!refreshIntervalRef.current) {
+        setMessages([]);
+        enqueueSnackbar(error.response?.data?.message || "Failed to Load the Messages", { 
+          variant: 'error',
+          anchorOrigin: { vertical: 'bottom', horizontal: 'center' }
+        });
+        setLoading(false);
+      }
     }
   };
 
@@ -184,17 +196,41 @@ const checkMessageFormat = () => {
   }
 };
 
-// Add this to the useEffect that fetches messages:
+// Set up auto-refresh when component mounts or selectedChat changes
 useEffect(() => {
   fetchMessages();
   selectedChatCompare = selectedChat;
   
   // Add this line to check message format after fetch
   setTimeout(() => {
-    if (messages.length > 0) {
+    if (messages.length > 0 && isMountedRef.current) {
       checkMessageFormat();
     }
   }, 1000);
+
+  // Set up message auto-refresh interval
+  if (selectedChat) {
+    // Clear any existing interval first
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+    }
+    
+    // Set up new interval
+    refreshIntervalRef.current = setInterval(() => {
+      if (isMountedRef.current && selectedChat) {
+        console.log("Auto-refreshing messages for chat:", selectedChat.chatName || "Private Chat");
+        fetchMessages();
+      }
+    }, REFRESH_INTERVAL);
+  }
+
+  // Cleanup function
+  return () => {
+    if (refreshIntervalRef.current) {
+      clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    }
+  };
 }, [selectedChat]);
 
   // Initialize socket connection
@@ -226,20 +262,25 @@ useEffect(() => {
         setOnlineUsers(users);
       });
     }
+
+    // Set component mounted flag
+    isMountedRef.current = true;
     
     // Cleanup on unmount
     return () => {
+      isMountedRef.current = false;
+      
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+      }
+      
       if (socketRef.current) {
         socketRef.current.disconnect();
         console.log("Socket.IO disconnected");
       }
     };
   }, [user]);
-
-  useEffect(() => {
-    fetchMessages();
-    selectedChatCompare = selectedChat;
-  }, [selectedChat]);
 
   useEffect(() => {
     // Ensure socket exists before attaching listeners

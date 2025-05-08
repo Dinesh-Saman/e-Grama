@@ -65,8 +65,6 @@ const loginUser = async (req, res) => {
 };
 
 const searchUsers = async (req, res) => {
-  console.log('searchUsers called with query:', req.query); // Debug
-  console.log('req.user:', req.user); // Debug
   const { search } = req.query;
   try {
     if (!search) {
@@ -89,7 +87,6 @@ const searchUsers = async (req, res) => {
       { password: 0 }
     );
 
-    console.log('Users found:', users); // Debug
     res.json(users);
   } catch (error) {
     console.error('Error in searchUsers:', error.message); // Debug

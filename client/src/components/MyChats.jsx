@@ -28,6 +28,9 @@ const MyChats = ({ fetchAgain }) => {
   const navigate = useNavigate();
   const { enqueueSnackbar } = useSnackbar();
   const theme = useTheme();
+  
+  // Auto-refresh interval in milliseconds (e.g., 3000 = 3 seconds)
+  const REFRESH_INTERVAL = 3000;
 
   const getSenderUser = (loggedUser, users) => {
     if (!loggedUser || !users || users.length < 2) {
@@ -67,6 +70,7 @@ const MyChats = ({ fetchAgain }) => {
     }
   };
 
+  // Initial fetch when component mounts or fetchAgain changes
   useEffect(() => {
     const userInfo = JSON.parse(sessionStorage.getItem("userInfo"));
     if (!userInfo) {
@@ -78,6 +82,20 @@ const MyChats = ({ fetchAgain }) => {
     fetchChats();
     // eslint-disable-next-line
   }, [fetchAgain]);
+
+  // Set up auto-refresh interval
+  useEffect(() => {
+    if (!user) return;
+    
+    // Set up polling interval for chat updates
+    const intervalId = setInterval(() => {
+      fetchChats();
+    }, REFRESH_INTERVAL);
+    
+    // Clean up interval on component unmount
+    return () => clearInterval(intervalId);
+    // eslint-disable-next-line
+  }, [user]);
 
   if (!user) {
     return null;

@@ -79,7 +79,6 @@ const createGroupChat = asyncHandler(async (req, res) => {
 
   try {
     parsedUsers = Array.isArray(users) ? users : JSON.parse(users);
-    console.log("parsedUsers "+parsedUsers)
   } catch (error) {
     return res.status(400).json({ message: 'Invalid users format' });
   }
@@ -90,7 +89,7 @@ const createGroupChat = asyncHandler(async (req, res) => {
       .json({ message: 'More than 2 users are required to form a group chat' });
   }
   const validUsers = await User.find({ _id: { $in: parsedUsers } });
-  console.log("Valid Users "+validUsers);
+
   if (validUsers.length !== parsedUsers.length) {
     return res.status(400).json({ message: 'One or more user IDs are invalid' });
   }

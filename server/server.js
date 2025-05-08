@@ -124,7 +124,6 @@ io.on("connection", (socket) => {
     onlineUsers.add(userData._id);
     io.emit("getUsers", Array.from(onlineUsers));
     socket.emit("connected");
-    console.log(`User ${userData._id} set up and joined room`);
   });
 
   // Join chat room
@@ -134,7 +133,6 @@ io.on("connection", (socket) => {
       return;
     }
     socket.join(room);
-    console.log("User Joined Room:", room);
   });
 
   // Handle typing events
@@ -174,14 +172,9 @@ io.on("connection", (socket) => {
     // Check if the chat includes the admin and if the admin is offline
     try {
       const chatData = await Chat.findById(chat._id).populate("users");
-      console.log("Chat users:", chatData.users.map(u => ({ id: u._id.toString(), username: u.username })));
-      console.log("Admin ID:", adminUserId);
-      console.log("Online users:", Array.from(onlineUsers));
       
       const isMessageForAdmin = chatData.users.some((u) => u._id.toString() === adminUserId);
       const isAdminOnline = onlineUsers.has(adminUserId);
-      console.log("Is message for admin?", isMessageForAdmin);
-      console.log("Is admin online?", isAdminOnline);
 
       if (isMessageForAdmin && !isAdminOnline && adminUserId) {
         console.log("Admin offline, sending to Rasa:", newMessageRecieved.content);
@@ -218,7 +211,6 @@ io.on("connection", (socket) => {
         // Broadcast the bot's response
         chat.users.forEach((user) => {
          // if (user._id === newMessageRecieved.sender._id) return;
-         console.log(`Emitting bot message to user ${user._id}`);
           socket.in(user._id).emit("message recieved", botMessage);
         });
         socket.in(newMessageRecieved.sender._id).emit("message recieved", botMessage);
@@ -245,7 +237,6 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     if (socket.userId) {
       onlineUsers.delete(socket.userId);
-      console.log(`User ${socket.userId} disconnected, online users now:`, Array.from(onlineUsers));
       io.emit("getUsers", Array.from(onlineUsers));
     }
     console.log("User disconnected:", socket.id);
