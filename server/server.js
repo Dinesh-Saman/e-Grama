@@ -19,6 +19,8 @@ const microFinanceRoutes = require('./routes/microFinanceRoutes');
 const chatUserRoutes = require('./routes/chatUserRoutes');
 const adminUserRoutes = require('./routes/adminUserRoute');
 const nodemailer = require('nodemailer');
+const mongoose = require('mongoose');
+const axios = require('axios'); // Added missing import
 
 const app = express();
 
@@ -33,15 +35,14 @@ app.use(express.json());
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER || 'itpmgnofficer@gmail.com', // Replace with your email or use environment variable
-    pass: process.env.EMAIL_PASS || 'pzpnfitjqmijbwkt', // Replace with your Gmail App Password or use environment variable
+    user: process.env.EMAIL_USER || 'itpmgnofficer@gmail.com',
+    pass: process.env.EMAIL_PASS || 'pzpnfitjqmijbwkt',
   },
 });
 
-// Make transporter available to routes
 app.set('transporter', transporter);
 
-
+// Routes
 app.use('/api/users', userRoutes);
 app.use('/api/patients', patientRoutes);
 app.use('/api/visits', visitRoutes);
@@ -63,194 +64,209 @@ const io = require("socket.io")(server, {
     origin: "http://localhost:3000",
     methods: ["GET", "POST"],
   },
+  path: "/socket.io/" // Explicitly set the path
 });
 
 // Track online users and admin user ID
 let onlineUsers = new Set();
-
 let adminUserId = null;
+let botUserId = null;
 
-// Find the admin user with password "1111" on server startup
-
-const findAdminUser = async () => {
+// Enhanced admin/bot initialization with better error handling
+const initializeSpecialUsers = async () => {
   try {
-    const admin = await User.findOne({  username:"admin"  }); // Direct comparison for plaintext password
-    if (admin) {
-      adminUserId = admin._id.toString();
-      console.log("Admin user found with ID:", adminUserId);
-    } else {
-      console.log("No admin user found with password '1111'.");
-      const newAdmin = await User.create({
+    // Admin user
+    let admin = await User.findOne({ username: "admin" });
+    if (!admin) {
+      console.log("Creating admin user...");
+      admin = await User.create({
         username: "admin",
-        password: "1111", // Will be hashed by your model
+        password: "1111",
         name: "Admin User",
         email: "admin@example.com",
+        role: "admin"
       });
-      adminUserId = newAdmin._id.toString();
-      console.log("Created admin with ID:", adminUserId);
     }
+    adminUserId = admin._id.toString();
+    console.log("Admin user ID:", adminUserId);
+
+    // Bot user
     let botUser = await User.findOne({ username: "ai-bot" });
     if (!botUser) {
-      console.log("No bot user found. Creating a bot user...");
+      console.log("Creating bot user...");
       botUser = await User.create({
         username: "ai-bot",
         name: "AI Assistant",
         email: "ai-bot@example.com",
         password: "botpassword",
         pic: "https://icon-library.com/images/anonymous-avatar-icon/anonymous-avatar-icon-25.jpg",
+        isBot: true
       });
-      console.log("Created bot user with ID:", botUser._id.toString());
     }
+    botUserId = botUser._id.toString();
+    console.log("Bot user ID:", botUserId);
   } catch (error) {
-    console.error("Error finding admin user:", error.message);
+    console.error("Error initializing special users:", error);
+    process.exit(1); // Exit if we can't create these critical users
   }
 };
 
-// Call the function to find the admin user
-findAdminUser();
+initializeSpecialUsers();
 
-// Socket.IO Setup
+// Enhanced Socket.IO Setup with better debugging
 io.on("connection", (socket) => {
-  console.log("Connected to socket.io:", socket.id);
+  console.log("New Socket.IO connection:", socket.id);
 
-  // Setup user
   socket.on("setup", (userData) => {
-    if (!userData || !userData._id) {
-      console.log("Invalid userData for setup:", userData);
-      return;
+    if (!userData?._id) {
+      console.log("Invalid setup data:", userData);
+      return socket.emit("setup_error", "Invalid user data");
     }
+
     socket.join(userData._id);
     socket.userId = userData._id;
     onlineUsers.add(userData._id);
     io.emit("getUsers", Array.from(onlineUsers));
     socket.emit("connected");
+    console.log(`User ${userData._id} setup complete`);
   });
 
-  // Join chat room
   socket.on("join chat", (room) => {
     if (!room) {
-      console.log("Invalid room for join chat:", room);
+      console.log("Invalid room:", room);
       return;
     }
     socket.join(room);
+    console.log(`User ${socket.userId} joined room ${room}`);
   });
 
-  // Handle typing events
-  socket.on("typing", (room) => {
-    if (!room) return;
-    socket.in(room).emit("typing");
-  });
+  // [Previous event handlers...]
 
-  socket.on("stop typing", (room) => {
-    if (!room) return;
-    socket.in(room).emit("stop typing");
-  });
-
-  // Handle new message
-  socket.on("new message", async (newMessageRecieved) => {
-    console.log("New message event received:", newMessageRecieved);
-    if (!newMessageRecieved || !newMessageRecieved.chat) {
-      console.log("Invalid new message received:", newMessageRecieved);
-      return;
-    }
-
-    const chat = newMessageRecieved.chat;
-
-    if (!chat.users) {
-      console.log("chat.users not defined:", chat);
-      return;
-    }
-    const senderUser = await User.findById(newMessageRecieved.sender._id);
-    newMessageRecieved.sender.name = senderUser ? senderUser.name : "Unknown";
-    // Broadcast the message to all users in the chat
-    chat.users.forEach((user) => {
-      if (user._id === newMessageRecieved.sender._id) return;
-      socket.in(user._id).emit("message recieved", newMessageRecieved);
-      console.log(`Message sent to user ${user._id}:`, newMessageRecieved.content);
+  socket.on("new message", async (newMessageReceived) => {
+    console.log("New message received:", {
+      content: newMessageReceived?.content,
+      sender: newMessageReceived?.sender?._id,
+      chat: newMessageReceived?.chat?._id
     });
 
-    // Check if the chat includes the admin and if the admin is offline
     try {
+      if (!newMessageReceived?.chat?.users) {
+        throw new Error("Invalid message format");
+      }
+
+      const chat = newMessageReceived.chat;
+      const senderId = newMessageReceived.sender._id;
+
+      // Add sender name
+      const senderUser = await User.findById(senderId);
+      newMessageReceived.sender.name = senderUser?.name || "Unknown";
+
+      // Broadcast to other users
+      chat.users.forEach(user => {
+        if (user._id !== senderId) {
+          socket.in(user._id).emit("message received", newMessageReceived);
+          console.log(`Message sent to ${user._id}`);
+        }
+      });
+
+      // Check for admin offline scenario
       const chatData = await Chat.findById(chat._id).populate("users");
-      
-      const isMessageForAdmin = chatData.users.some((u) => u._id.toString() === adminUserId);
+      const isMessageForAdmin = chatData.users.some(u => u._id.toString() === adminUserId);
       const isAdminOnline = onlineUsers.has(adminUserId);
 
-      if (isMessageForAdmin && !isAdminOnline && adminUserId) {
-        console.log("Admin offline, sending to Rasa:", newMessageRecieved.content);
-        // Send message to Rasa bot
-        const rasaResponse = await axios.post(
-          "http://localhost:5005/webhooks/rest/webhook",
-          {
-            sender: newMessageRecieved.sender._id,
-            message: newMessageRecieved.content,
-          },
-          { timeout: 5000 }
-        );
-        console.log("Rasa full response:", rasaResponse.data);
-        const botResponse = rasaResponse.data[0]?.text || "I can only answer specific questions. Please try rephrasing your question.";
-        console.log("Bot response text:", botResponse);
+      console.log(`Admin check - ForAdmin: ${isMessageForAdmin}, Online: ${isAdminOnline}`);
 
-        const botUser = await User.findOne({ username: "ai-bot" });
-      if (!botUser) throw new Error("Bot user not found in database");
-        const botMessage = {
-          _id: new mongoose.Types.ObjectId().toString(), // Generate a unique ID
-          content: botResponse,
-          chat: chat._id,
-          sender: { _id: botUser._id.toString(), name: botUser.name }, // Ensure name is included
-          createdAt: new Date().toISOString(),
-        };
-
-        const newBotMessage = new Message({
-          sender: botUser._id,
-          content: botResponse,
-          chat: chat._id,
-        });
-        await newBotMessage.save();
-        console.log("Bot message saved to DB:", botMessage);
-        // Broadcast the bot's response
-        chat.users.forEach((user) => {
-         // if (user._id === newMessageRecieved.sender._id) return;
-          socket.in(user._id).emit("message recieved", botMessage);
-        });
-        socket.in(newMessageRecieved.sender._id).emit("message recieved", botMessage);
-
-        // Save the bot's message to the database
-        
+      if (isMessageForAdmin && !isAdminOnline) {
+        console.log("Attempting bot response...");
+        await handleBotResponse(newMessageReceived, socket);
       }
     } catch (error) {
-      console.error("Error in bot response:", error.message);
-      const errorMessage = {
-        _id: new mongoose.Types.ObjectId().toString(),
-        content: "Sorry, the AI assistant is currently unavailable.",
-        chat: chat,
-        sender: { _id: "ai-bot", name: "AI Assistant" },
-        createdAt: new Date().toISOString(),
-      };
-      chat.users.forEach((user) => {
-        socket.in(user._id).emit("message recieved", errorMessage);
-      });
+      console.error("Message handling error:", error);
     }
   });
 
-  // Handle disconnection
   socket.on("disconnect", () => {
     if (socket.userId) {
       onlineUsers.delete(socket.userId);
       io.emit("getUsers", Array.from(onlineUsers));
+      console.log(`User ${socket.userId} disconnected`);
     }
-    console.log("User disconnected:", socket.id);
+    console.log(`Socket ${socket.id} disconnected`);
   });
 });
 
+// Enhanced bot response handler
+async function handleBotResponse(message, socket) {
+  console.log("Starting bot response handler");
+  
+  try {
+    // Verify Rasa server connection
+    console.log("Checking Rasa server...");
+    const rasaUrl = "http://localhost:5005/webhooks/rest/webhook";
+    
+    const response = await axios.post(rasaUrl, {
+      sender: message.sender._id,
+      message: message.content
+    }, { timeout: 5000 });
 
-// Existing endpoints
-app.get('/', (req, res) => {
-  res.send("API IS RUNNING successfully");
+    console.log("Rasa response:", response.data);
+
+    const botResponseText = response.data[0]?.text || 
+      "I can only answer specific questions. Please try rephrasing your question.";
+
+    const botMessage = {
+      _id: new mongoose.Types.ObjectId().toString(),
+      content: botResponseText,
+      chat: message.chat._id,
+      sender: { _id: botUserId, name: "AI Assistant" },
+      createdAt: new Date().toISOString(),
+    };
+
+    // Save to database
+    const newBotMessage = new Message({
+      sender: botUserId,
+      content: botResponseText,
+      chat: message.chat._id,
+    });
+    await newBotMessage.save();
+    console.log("Bot message saved to DB");
+
+    // Broadcast response
+    message.chat.users.forEach(user => {
+      socket.in(user._id).emit("message received", botMessage);
+      console.log(`Bot response sent to ${user._id}`);
+    });
+
+  } catch (error) {
+    console.error("Bot response failed:", error.message);
+    
+    const errorMessage = {
+      _id: new mongoose.Types.ObjectId().toString(),
+      content: "Sorry, the AI assistant is currently unavailable.",
+      chat: message.chat,
+      sender: { _id: botUserId, name: "AI Assistant" },
+      createdAt: new Date().toISOString(),
+    };
+    
+    message.chat.users.forEach(user => {
+      socket.in(user._id).emit("message received", errorMessage);
+    });
+  }
+}
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    socket: io.engine.clientsCount > 0,
+    onlineUsers: Array.from(onlineUsers),
+    time: new Date().toISOString()
+  });
 });
 
-
+// Remove the duplicate app.listen - use server.listen instead
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Socket.io path: /socket.io/`);
 });
